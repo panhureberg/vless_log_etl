@@ -1,0 +1,5 @@
+data/*.log
+data/*.csv
+config/*.txt
+__pycache__/
+.env
