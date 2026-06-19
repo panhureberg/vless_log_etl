@@ -6,13 +6,24 @@ from pathlib import Path
 # Performance timer
 start = time.perf_counter()
 
-# Sequential execution paths for the ETL pipeline
+# Parse execution flags
+skip_download = "--skip-download" in sys.argv
+
+# Core pipeline processing steps
 PIPELINE_STEPS = [
-    "scripts/download_logs.py",
     "raw_logs.py",
     "normalize_domains.py",
-    "sessionize_logs.py",
+    "sessionize_logs.py"
 ]
+
+# Prepend download step if execution flag is absent
+if not skip_download:
+    PIPELINE_STEPS.insert(0, "scripts/download_logs.py")
+else:
+    # Verify local raw data availability
+    if not Path("data/history.log").exists():
+        print("Error: Local source 'data/history.log' is missing. Pipeline aborted.")
+        sys.exit(1)
 
 
 # Execute a single pipeline script and verify exit code status
