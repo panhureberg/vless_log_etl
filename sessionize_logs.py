@@ -1,30 +1,47 @@
+import sys
+import time
+from pathlib import Path
 import pandas as pd
 from sqlalchemy import create_engine
 
-INPUT_PATH = "data/cleaned_logsanddomains.log"
+# Performance timer
+start = time.perf_counter()
+
+# Hardcoded environment paths and configuration assets
+INPUT_PATH = "data/enriched_logs.csv"  # Aligned with pipeline naming convention
 NOISE_DOMAINS_PATH = "data/noise_domains.txt"
-OUTPUT_PATH = "data/sessions.csv"
+OUTPUT_PATH = "data/user_sessions.csv"
+DB_CONFIG_PATH = Path("config/db_uri.txt")
 
 SESSION_THRESHOLD_SECONDS = 15
 
-# Инициализируем движок БД. Локальный хост и дефолтный пароль для портфолио — ок,
-# главное, что в реальном проде мы бы убрали это в конфиг/.env.
-engine = create_engine("postgresql://postgres:1488@localhost:5432/traffick", echo=True)
 
-# Load manually excluded domains.
+# Load PostgreSQL database connection URI from localized configuration file
+def get_engine():
+    if not DB_CONFIG_PATH.exists():
+        print(f"Error: Database configuration file missing at {DB_CONFIG_PATH}")
+        sys.exit(1)
+    db_uri = DB_CONFIG_PATH.read_text(encoding="utf-8").strip()
+    return create_engine(db_uri, echo=False)
+
+
+# Initialize database engine instance
+engine = get_engine()
+
+# Load manually excluded tracking noise domains
 with open(NOISE_DOMAINS_PATH, "r", encoding="utf-8") as f:
     noise_domains = [line.strip() for line in f if line.strip()]
 
-# Load domain-normalized logs from the previous ETL step.
+# Load domain-normalized traffic log entries from the previous pipeline stage
 df = pd.read_csv(INPUT_PATH, encoding="utf-8")
 
-# Remove manually selected noisy domains.
+# Filter out explicitly blacklisted noise tracking domains
 df = df[~df["clear_names"].isin(noise_domains)].copy()
 
-# Build a single datetime column from date and time.
+# Parse atomic date and time values into unified datetime sequences
 df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"])
 
-# Keep only columns needed for sessionization and analysis.
+# Keep structural dimensions required for session aggregation workflows
 df = df[
     [
         "datetime",
@@ -38,27 +55,22 @@ df = df[
     ]
 ]
 
-# Sort events before calculating time gaps.
+# Order structural data frames prior to interval calculation
 df = df.sort_values(["email", "clear_names", "datetime"])
 
-# Calculate time difference between current and previous request.
+# Calculate temporal delta gap values between consecutive requests
 df["time_diff"] = (
-    df.groupby(["email", "clear_names"])["datetime"]
-    .diff()
-    .dt.total_seconds()
+    df.groupby(["email", "clear_names"])["datetime"].diff().dt.total_seconds()
 )
 
-# Mark a new session when the gap between requests is greater than threshold.
+# Flag request gap limits exceeding the inactivity session threshold
 df["new_session"] = df["time_diff"] > SESSION_THRESHOLD_SECONDS
 df["new_session"] = df["new_session"].fillna(True)
 
-# Create session IDs as cumulative sum of new_session flags.
-df["session_id"] = (
-    df.groupby(["email", "clear_names"])["new_session"]
-    .cumsum()
-)
+# Generate unique cumulative session identifiers per client framework
+df["session_id"] = df.groupby(["email", "clear_names"])["new_session"].cumsum()
 
-# Aggregate raw requests into user-domain sessions.
+# Aggregate transaction rows into discrete semantic user sessions
 sessions = (
     df.groupby(["email", "clear_names", "session_id"])
     .agg(
@@ -69,48 +81,40 @@ sessions = (
     .reset_index()
 )
 
-# Calculate session duration in seconds.
+# Compute absolute session operational lifespan values in seconds
 sessions["session_time"] = (
     sessions["session_end"] - sessions["session_start"]
 ).dt.total_seconds()
 
-# Remove one-second-zero-duration noise.
+# Filter out transient single-packet ping noise anomalies
 sessions_filtered = sessions[
-    (sessions["session_time"] >= 1)
-    & (sessions["requests"] >= 1)
+    (sessions["session_time"] >= 1) & (sessions["requests"] >= 1)
 ].copy()
 
 
-def session_export(df_to_export):
-    # Сначала выводим подсказку, чтобы пользователь понимал, что вводить
-    print("Input format: 1 to CSV, 2 to Excel, 3 to SQL")
-    x = int(input())
-    
-    if x == 1:
-        # Исправлено расширение на .csv для корректного чтения программами
-        df_to_export.to_csv("data/sessions.csv", index=False, encoding="utf-8")
-        print("Successfully saved to data/sessions.csv")
-    elif x == 2:
-        # Исправлено расширение на .xlsx для Excel формата
-        # (Понадобится библиотека openpyxl: pip install openpyxl)
-        df_to_export.to_excel("data/sessions.xlsx", index=False)
-        print("Successfully saved to data/sessions.xlsx")
-    elif x == 3:
-        # Изменено на 'append', чтобы не удалять существующую таблицу и её структуру
-        df_to_export.to_sql(
-            name='my_table',          # Имя таблицы в базе данных
-            con=engine,               # Объект подключения (engine)
-            if_exists='append',       # Дописываем строки в конец таблицы
-            index=False               # Не записываем индексы DataFrame
-        )
-        print("Successfully exported to PostgreSQL table 'my_table'")
+# Automate pipeline analytics persistence and relational loading execution
+def export_pipeline_data(df_to_export):
+    # Persist flat file infrastructure data backup
+    df_to_export.to_csv(OUTPUT_PATH, index=False, encoding="utf-8")
+    print(f"Stored local backup destination: {OUTPUT_PATH}")
+
+    # Inject structured entities into the active database cluster environment
+    df_to_export.to_sql(
+        name="my_table", con=engine, if_exists="append", index=False
+    )
+    print("Exported session frames straight to PostgreSQL table 'my_table'")
 
 
-# Вызываем функцию и передаем в нее наш отфильтрованный датасет сессий
-session_export(sessions_filtered)
+# Execute automated database ingestion loop
+export_pipeline_data(sessions_filtered)
 
-# Basic run summary.
-print(f"\nRaw rows after noise filtering: {len(df)}")
-print(f"Sessions created: {len(sessions_filtered)}")
-print(f"Unique users: {sessions_filtered['email'].nunique()}")
-print(f"Unique domains: {sessions_filtered['clear_names'].nunique()}")
+# Pipeline monitoring summary metrics execution logs
+end = time.perf_counter()
+print(f"\nRaw rows processed post-filtering: {len(df)}")
+print(f"Semantic sessions created: {len(sessions_filtered)}")
+# Using clear mapping names to bypass dynamic metric evaluation issues
+print(f"Unique tracked users identified: {sessions_filtered['email'].nunique()}")
+print(
+    f"Unique target domains mapped: {sessions_filtered['clear_names'].nunique()}"
+)
+print(f"Module runtime sequence finalized in {end - start:.2f} seconds")
